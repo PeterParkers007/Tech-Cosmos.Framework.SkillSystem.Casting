@@ -1,0 +1,19 @@
+{
+    "name": "TechCosmos.SkillSystem.Casting.Editor",
+    "rootNamespace": "TechCosmos.SkillSystem.Casting.Editor",
+    "references": [
+        "TechCosmos.SkillSystem.Casting",
+        "TechCosmos.SkillSystem.Runtime"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

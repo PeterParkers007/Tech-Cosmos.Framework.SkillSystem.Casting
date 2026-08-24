@@ -53,7 +53,7 @@ TryCast（核心 API 不变）
 | 走了要不要打断 | 这是玩法规则 |
 | 读条要不要站桩 | 导航 / 移动组件是你的 |
 | 播什么动画、Cue | 订本包事件即可，Clip 在你这边 |
-| `IUnit` 是哪个类 | 中间件必须封闭到项目单位类型 |
+| `IUnit` 是哪个类 | 本包菜单弹框选，生成封闭中间件 |
 
 不挂本包时：`SkillHolder.TryCast` 守卫通过后立刻 `ExecuteLayer.Execute`，和没装扩展一样。
 
@@ -65,7 +65,7 @@ TryCast（核心 API 不变）
 2. 把本包放到 `Packages/` 或 `Assets/` 下。
 3. 项目程序集引用 `TechCosmos.SkillSystem.Casting`（`autoReferenced: true` 时默认能看到）。
 
-本包 **不** 引用你的 `Unit` 类型，因此中间件必须在项目里关泛型（见下一步）。
+本包 **不** 引用你的 `Unit` 类型。中间件是开泛型；用本包菜单选一个项目里的 `IUnit` 生成封闭类。 **不要** 用技能框架的 Generate All 生成本包中间件。
 
 ---
 
@@ -75,26 +75,10 @@ TryCast（核心 API 不变）
 
 ### 3.1 生成中间件封闭类
 
-本包提供开泛型 `SkillCastMiddleware<T>`，带三个 `[RequiredData]`。  
-生成器认的是 `[AutoGenerateMiddleware(typeof(你的单位))]`，这个特性必须写在**能看到你的 Unit 的程序集**里。
+菜单：`Tech-Cosmos → SkillSystem Casting → Generate Cast Middleware`。
 
-项目里加一层（示例单位叫 `Hero`）：
-
-```csharp
-using System;
-using TechCosmos.SkillSystem.Casting;
-using TechCosmos.SkillSystem.Runtime;
-
-[Serializable]
-[AutoGenerateMiddleware(typeof(Hero))]
-public class SkillCastMiddleware<T> : TechCosmos.SkillSystem.Casting.SkillCastMiddleware<T>
-    where T : Hero, IUnit<T>
-{
-}
-```
-
-然后菜单：`Tech-Cosmos → SkillSystem → Generate / Generate All`。  
-会生成 `HeroSkillCastMiddleware`，技能数值层出现：
+弹出项目里实现了 `IUnit<>` 的类型列表，选一个，点 **生成**。  
+得到 `YourUnitSkillCastMiddleware`（目录 `Assets/Generated/Casting/`，避免被核心 Generate All 清掉），技能数值层出现：
 
 | 键 | 类型 | 默认 | 含义 |
 |----|------|------|------|
@@ -272,7 +256,7 @@ _cast.OnCastInterrupted += (skill, reason) => { /* 被打断 */ };
 | `SkillCastPhase` | `None` / `Casting` / `Channeling` / `Executing` |
 | `InterruptReason` | 打断原因枚举 |
 | `SkillCastTiming` | 三个键名 + 从 DataLayer 读取 |
-| `SkillCastMiddleware<T>` | 开泛型中间件，项目再包一层生成封闭类 |
+| `SkillCastMiddleware<T>` | 开泛型中间件；本包菜单选 IUnit 生成封闭类 |
 
 `SkillHolder<T>.Executor`（核心）：
 
@@ -289,7 +273,7 @@ holder.TryCast(skill, context);
 没挂 `Executor`、没 Tick、或 `SkillCastTime` / `SkillChannelTime` 都是 0。先查这三件。
 
 **数值层没有这三个键？**  
-没写项目侧 `[AutoGenerateMiddleware(typeof(YourUnit))]`、没 Generate All，或生成类没进 Middleware Registry。
+没走本包菜单 `Generate Cast Middleware`、没选 IUnit，或生成类没进 Middleware Registry。技能框架的 Generate All **不会**生成本包中间件。
 
 **TryCast 返回 true 但伤害还没出？**  
 有前摇时 `true` 只表示进了 Casting。结算在 Tick 走完之后。
