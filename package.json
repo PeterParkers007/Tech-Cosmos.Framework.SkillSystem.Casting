@@ -1,0 +1,17 @@
+{
+  "name": "com.techcosmos.skillsystem.casting",
+  "displayName": "SkillSystem Casting",
+  "version": "1.0.0",
+  "description": "技能框架的可选施法扩展：读条 / 引导 / 打断。接入 SkillHolder.Executor，由项目 Tick。",
+  "unity": "2022.3",
+  "keywords": [
+    "skill",
+    "cast",
+    "channel",
+    "interrupt"
+  ],
+  "author": {
+    "name": "Tech-Cosmos"
+  },
+  "category": "Gameplay"
+}

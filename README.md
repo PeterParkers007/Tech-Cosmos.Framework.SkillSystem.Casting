@@ -1,0 +1,307 @@
+# SkillSystem Casting
+
+> **包名**：`com.techcosmos.skillsystem.casting`  
+> **版本**：**1.0.0**  
+> **依赖**：`com.techcosmos.skillsystem`（SkillSystem Runtime 3.2+）  
+> **Unity**：2022.3 或更高  
+> **命名空间**：`TechCosmos.SkillSystem.Casting`
+
+技能框架的**可选施法扩展**：给主动技能加上前摇、引导和打断。  
+核心包只有「立刻结算」；本包把「带时间的施法」补上，**不接管**单位循环、移动、AI、表现。
+
+**核心等式**：
+
+```
+TryCast（核心 API 不变）
+  → 守卫 / 目标类型（核心 SkillHolder）
+  → SkillHolder.Executor.TryExecute（本包 SkillExecutionController）
+       有前摇/引导 → 读条 / 引导 → 再走 SkillExecutionPipeline
+       时长为 0     → 立刻 Pipeline.Execute
+```
+
+---
+
+## 目录
+
+1. [这是什么、不管什么](#1-这是什么不管什么)
+2. [安装](#2-安装)
+3. [5 分钟接入](#3-5-分钟接入)
+4. [施法流程](#4-施法流程)
+5. [数值层三个键](#5-数值层三个键)
+6. [打断与优先级](#6-打断与优先级)
+7. [事件与表现](#7-事件与表现)
+8. [API 速查](#8-api-速查)
+9. [FAQ](#9-faq)
+
+---
+
+## 1. 这是什么、不管什么
+
+### 管
+
+- 读条（`SkillCastTime`）
+- 引导（`SkillChannelTime`）
+- 读条/引导期间可否被外部打断（`SkillCanBeInterrupted`）
+- 读完后调用核心 `SkillExecutionPipeline`
+- 把上述三个键灌进技能数值层（中间件 + 技能编辑器「概念」分组）
+
+### 不管（项目自己写）
+
+| 事项 | 为什么 |
+|------|--------|
+| 每帧 `Tick()` | 时钟在你的 Update / ECS System 里 |
+| 走了要不要打断 | 这是玩法规则 |
+| 读条要不要站桩 | 导航 / 移动组件是你的 |
+| 播什么动画、Cue | 订本包事件即可，Clip 在你这边 |
+| `IUnit` 是哪个类 | 中间件必须封闭到项目单位类型 |
+
+不挂本包时：`SkillHolder.TryCast` 守卫通过后立刻 `ExecuteLayer.Execute`，和没装扩展一样。
+
+---
+
+## 2. 安装
+
+1. 工程里已有 SkillSystem Runtime（asmdef：`TechCosmos.SkillSystem.Runtime`）。
+2. 把本包放到 `Packages/` 或 `Assets/` 下。
+3. 项目程序集引用 `TechCosmos.SkillSystem.Casting`（`autoReferenced: true` 时默认能看到）。
+
+本包 **不** 引用你的 `Unit` 类型，因此中间件必须在项目里关泛型（见下一步）。
+
+---
+
+## 3. 5 分钟接入
+
+三件必须做的事。少一件，读条不会发生或时长键不会出现。
+
+### 3.1 生成中间件封闭类
+
+本包提供开泛型 `SkillCastMiddleware<T>`，带三个 `[RequiredData]`。  
+生成器认的是 `[AutoGenerateMiddleware(typeof(你的单位))]`，这个特性必须写在**能看到你的 Unit 的程序集**里。
+
+项目里加一层（示例单位叫 `Hero`）：
+
+```csharp
+using System;
+using TechCosmos.SkillSystem.Casting;
+using TechCosmos.SkillSystem.Runtime;
+
+[Serializable]
+[AutoGenerateMiddleware(typeof(Hero))]
+public class SkillCastMiddleware<T> : TechCosmos.SkillSystem.Casting.SkillCastMiddleware<T>
+    where T : Hero, IUnit<T>
+{
+}
+```
+
+然后菜单：`Tech-Cosmos → SkillSystem → Generate / Generate All`。  
+会生成 `HeroSkillCastMiddleware`，技能数值层出现：
+
+| 键 | 类型 | 默认 | 含义 |
+|----|------|------|------|
+| `SkillCastTime` | float / 公式 | `0` | 前摇（秒） |
+| `SkillChannelTime` | float / 公式 | `0` | 引导（秒） |
+| `SkillCanBeInterrupted` | bool | `true` | 读条/引导能否被外部打断 |
+
+把生成的中间件挂进你的 `GlobalMiddlewareRegistry`（和其他中间件一样）。  
+两个时长都是 `0` 的技能仍然立刻放，行为与没装本包相同。
+
+### 3.2 把控制器挂到 SkillHolder.Executor
+
+每个施法者一个控制器实例，并且 **Tick 的必须是这同一个实例**。
+
+```csharp
+using TechCosmos.SkillSystem.Casting;
+using TechCosmos.SkillSystem.Runtime;
+
+public class Hero : MonoBehaviour, IUnit<Hero>
+{
+    SkillHolder<Hero> _skills;
+    SkillExecutionController<Hero> _cast;
+
+    void Awake()
+    {
+        _skills = new SkillHolder<Hero>(/* 你的 UnitEvent */);
+        _cast = new SkillExecutionController<Hero>();
+        _skills.Executor = _cast;   // 同一实例
+    }
+
+    public bool TryCast(ISkill<Hero> skill, SkillContext<Hero> context)
+        => _skills.TryCast(skill, context);
+
+    public bool TryCast(SkillId skillId, SkillContext<Hero> context)
+        => _skills.TryCast(skillId, context);
+}
+```
+
+对外仍是核心的 `TryCast`。有前摇时返回 `true` 表示**已经进入读条**，不是机制已经结算。
+
+### 3.3 每帧 Tick
+
+不 Tick，前摇永远走不完。
+
+```csharp
+void Update()
+{
+    _cast.Tick();   // 或在 ECS System 里对每个单位 Tick
+}
+```
+
+时钟默认 `SkillSystemServices.Clock`。单测可注入 `ISkillClock`：
+
+```csharp
+var controller = new SkillExecutionController<Hero>(clock);
+```
+
+---
+
+## 4. 施法流程
+
+```
+SkillHolder.TryCast
+  ├─ 不是主动技能 → false（打日志）
+  ├─ SkillCastValidator（目标 / 点地 / 无目标）
+  ├─ ICastGuard
+  └─ Executor.TryExecute        ← 本包
+        ├─ 正在忙且不能被本技能顶掉 → false
+        ├─ castTime>0 或 channelTime>0
+        │     ├─ Pipeline.CanExecute 失败 → false（不开读条）
+        │     └─ Phase = Casting，派发 OnCastStarted
+        │           Tick 攒满 castTime
+        │             ├─ 有 channelTime → Phase = Channeling，elapsed 清零
+        │             │     Tick 攒满 channelTime → CompleteCast
+        │             └─ 无引导 → CompleteCast
+        │                   Pipeline.Execute
+        │                     成功 → OnCastCompleted
+        │                     失败 → OnCastFailed（蓝不够、条件、中间件取消等）
+        └─ 两个时长都是 0 → 立刻 Pipeline.Execute，返回是否 Success
+```
+
+`CanExecute` 与 `Execute` 前半段对齐：中间件 `OnBeforeExecute` + ConfirmCast。  
+读条开始前失败则根本不进 Casting，避免「条已经走了、结算却没有」。
+
+**事件触发的主动技能**（`ActiveBaseLayer.Trigger`）仍走核心立刻 Execute，**不**经过本包。玩家/AI 请走 `TryCast`。
+
+---
+
+## 5. 数值层三个键
+
+控制器只认这些名字（`SkillCastTiming` 常量，与中间件 `RequiredData` 一致）：
+
+```csharp
+SkillCastTiming.CastTimeKey           // "SkillCastTime"
+SkillCastTiming.ChannelTimeKey        // "SkillChannelTime"
+SkillCastTiming.CanBeInterruptedKey   // "SkillCanBeInterrupted"
+```
+
+读取：
+
+```csharp
+float windup = SkillCastTiming.GetCastTime(skill, context);
+float channel = SkillCastTiming.GetChannelTime(skill, context);
+bool canInterrupt = SkillCastTiming.GetCanBeInterrupted(skill, context);
+```
+
+缺键时：时长当 `0`，可打断当 `true`。  
+技能编辑器里改这三个数即可，**不必**为本包再开编辑窗口。
+
+---
+
+## 6. 打断与优先级
+
+### 6.1 TryInterrupt / Cancel
+
+```csharp
+_cast.TryInterrupt(InterruptReason.Movement);
+_cast.TryInterrupt(InterruptReason.Death);
+_cast.Cancel();   // = Manual
+```
+
+| 原因 | 何时由项目调用（示例，不是包内逻辑） |
+|------|--------------------------------------|
+| `Manual` | 玩家停止、切技能取消 |
+| `Movement` | 开始移动、寻路被破坏 |
+| `Damage` | 挨打要断读条时 |
+| `HardCrowdControl` | 眩晕等 |
+| `Silence` | 沉默 |
+| `Death` | 死亡、回池 |
+
+`SkillCanBeInterrupted == false` 时：只有 **`Manual` 和 `Death`** 能打断，其它原因返回 `false`、读条继续。
+
+项目不调用 `TryInterrupt`，读条就不会因移动/受伤而断。这是刻意的。
+
+### 6.2 用更高优先级顶掉当前读条
+
+`SkillProfile.executionPriority` 仍在核心 Profile 上。  
+正在读条时再 `TryCast` 另一个技能：
+
+- 当前不可打断 → 新技能失败，旧读条继续
+- 新技能优先级 **大于** 当前 → 旧的按 `Manual` 打断，开始新读条
+- 否则 → 新技能失败
+
+### 6.3 忙状态
+
+```csharp
+bool busy = _cast.IsBusy;
+SkillCastPhase phase = _cast.Phase;   // None / Casting / Channeling / Executing
+ISkill<Hero> current = _cast.ActiveSkill;
+```
+
+AI、指令、站桩都可以读这些。本包不替你停 NavMesh。
+
+---
+
+## 7. 事件与表现
+
+```csharp
+_cast.OnCastStarted     += (skill, ctx) => { /* 读条开始：播前摇动画 */ };
+_cast.OnCastCompleted   += (skill, ctx) => { /* 管线成功 */ };
+_cast.OnCastFailed      += (skill, ctx, result) => { /* 条走完但结算失败 */ };
+_cast.OnCastInterrupted += (skill, reason) => { /* 被打断 */ };
+```
+
+核心 `SkillPresentationBinder.BindCaster` 订的是 ExecuteLayer（机制开跑 ≈ CastStart）。  
+读条真正开始请订 **本包** `OnCastStarted`，不要指望 Binder 的 CastStart 等于开读条。
+
+---
+
+## 8. API 速查
+
+| 类型 | 作用 |
+|------|------|
+| `SkillExecutionController<T>` | 状态机，实现 `ISkillExecutor<T>` |
+| `SkillCastPhase` | `None` / `Casting` / `Channeling` / `Executing` |
+| `InterruptReason` | 打断原因枚举 |
+| `SkillCastTiming` | 三个键名 + 从 DataLayer 读取 |
+| `SkillCastMiddleware<T>` | 开泛型中间件，项目再包一层生成封闭类 |
+
+`SkillHolder<T>.Executor`（核心）：
+
+```csharp
+holder.Executor = controller;
+holder.TryCast(skill, context);
+```
+
+---
+
+## 9. FAQ
+
+**装了包但所有技能都是秒放？**  
+没挂 `Executor`、没 Tick、或 `SkillCastTime` / `SkillChannelTime` 都是 0。先查这三件。
+
+**数值层没有这三个键？**  
+没写项目侧 `[AutoGenerateMiddleware(typeof(YourUnit))]`、没 Generate All，或生成类没进 Middleware Registry。
+
+**TryCast 返回 true 但伤害还没出？**  
+有前摇时 `true` 只表示进了 Casting。结算在 Tick 走完之后。
+
+**事件被动/主动 Trigger 没有前摇？**  
+`ActiveBaseLayer.Trigger` 不走 Executor。指令施法请 `TryCast`。
+
+**和 ICastGuard 什么关系？**  
+守卫在 `TryCast` 入口、Executor **之前**。眩晕禁施法用守卫拦新技能；已经在读条的要用 `TryInterrupt`。
+
+**能改键名吗？**  
+控制器写死上述三个常量。要换名字只能改本包或自己实现 `ISkillExecutor`。
+
+**UnitBase 会自动 Tick 吗？**  
+不会。核心 `UnitBase` 不再创建控制器。自己持有 `SkillHolder` 的单位按第 3 节接。
