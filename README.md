@@ -1,7 +1,7 @@
 # SkillSystem Casting
 
 > **包名**：`com.techcosmos.skillsystem.casting`  
-> **版本**：**1.0.0**  
+> **版本**：**1.1.0**  
 > **依赖**：`com.techcosmos.skillsystem`（SkillSystem Runtime 3.2+）  
 > **Unity**：2022.3 或更高  
 > **命名空间**：`TechCosmos.SkillSystem.Casting`
@@ -154,9 +154,10 @@ SkillHolder.TryCast
         │             ├─ 有 channelTime → Phase = Channeling，elapsed 清零
         │             │     Tick 攒满 channelTime → CompleteCast
         │             └─ 无引导 → CompleteCast
-        │                   Pipeline.Execute
+        │                   先写 LastElapsed，再清会话，再 Pipeline.Execute
         │                     成功 → OnCastCompleted
         │                     失败 → OnCastFailed（蓝不够、条件、中间件取消等）
+        ├─ TryRelease（前摇/引导中）→ 同上 CompleteCast（前摇释放会跳过未开始的引导）
         └─ 两个时长都是 0 → 立刻 Pipeline.Execute，返回是否 Success
 ```
 
@@ -232,6 +233,23 @@ ISkill<Hero> current = _cast.ActiveSkill;
 
 AI、指令、站桩都可以读这些。本包不替你停 NavMesh。
 
+```csharp
+float charged = _cast.LastElapsed;   // 上次出手时当前阶段已过秒数
+```
+
+管线跑的时候 `Elapsed` 已经是 0，公式请读 `LastElapsed`。打断不改这个数。
+
+### 6.4 提前释放
+
+```csharp
+bool released = _cast.TryRelease();
+```
+
+读条/引导中立刻结算，不是 `Cancel`。不看 `SkillCanBeInterrupted`。  
+前摇阶段释放会跳过还没开始的引导。空闲时返回 `false`。
+
+项目自己决定谁按键、要不要最短充能。本包不替你绑输入。
+
 ---
 
 ## 7. 事件与表现
@@ -252,7 +270,7 @@ _cast.OnCastInterrupted += (skill, reason) => { /* 被打断 */ };
 
 | 类型 | 作用 |
 |------|------|
-| `SkillExecutionController<T>` | 状态机，实现 `ISkillExecutor<T>` |
+| `SkillExecutionController<T>` | 状态机，实现 `ISkillExecutor<T>`；`LastElapsed` / `TryRelease` |
 | `SkillCastPhase` | `None` / `Casting` / `Channeling` / `Executing` |
 | `InterruptReason` | 打断原因枚举 |
 | `SkillCastTiming` | 三个键名 + 从 DataLayer 读取 |
@@ -276,7 +294,10 @@ holder.TryCast(skill, context);
 没走本包菜单 `Generate Cast Middleware`、没选 IUnit，或生成类没进 Middleware Registry。技能框架的 Generate All **不会**生成本包中间件。
 
 **TryCast 返回 true 但伤害还没出？**  
-有前摇时 `true` 只表示进了 Casting。结算在 Tick 走完之后。
+有前摇时 `true` 只表示进了 Casting。结算在 Tick 走完或 `TryRelease` 之后。
+
+**公式里按充能时间算伤害？**  
+读 `LastElapsed`，不要读 `Elapsed`。`SkillCastTime` 仍是上限。
 
 **事件被动/主动 Trigger 没有前摇？**  
 `ActiveBaseLayer.Trigger` 不走 Executor。指令施法请 `TryCast`。

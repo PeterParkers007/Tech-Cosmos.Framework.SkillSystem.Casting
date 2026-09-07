@@ -42,6 +42,7 @@ namespace TechCosmos.SkillSystem.Casting
     {
         private readonly ISkillClock _clock;
         private ActiveCast _activeCast;
+        private float _lastElapsed;
 
         /// <summary>当前施法阶段。</summary>
         public SkillCastPhase Phase => _activeCast?.phase ?? SkillCastPhase.None;
@@ -78,6 +79,11 @@ namespace TechCosmos.SkillSystem.Casting
         public bool CanBeInterrupted => _activeCast?.canBeInterrupted ?? true;
         /// <summary>本次施法开始时刻（时钟 Time）。空闲为 0。</summary>
         public float StartedAt => _activeCast?.startedAt ?? 0f;
+        /// <summary>
+        /// 上次成功出手时当前阶段已过秒数。满条和提前释放都会写。
+        /// 打断不改这个数。管线跑的时候读它，不要读 <see cref="Elapsed"/>（那时已经是 0）。
+        /// </summary>
+        public float LastElapsed => _lastElapsed;
 
         float CurrentPhaseDuration
         {
@@ -184,6 +190,22 @@ namespace TechCosmos.SkillSystem.Casting
         /// <summary>手动取消当前施法。</summary>
         public void Cancel() => TryInterrupt(InterruptReason.Manual);
 
+        /// <summary>
+        /// 提前结束当前前摇/引导并结算。不是打断。
+        /// 空闲或不是读条/引导时返回 false。不看 <see cref="CanBeInterrupted"/>。
+        /// 前摇阶段释放会跳过尚未开始的引导。
+        /// </summary>
+        public bool TryRelease()
+        {
+            if (_activeCast == null)
+                return false;
+            if (_activeCast.phase != SkillCastPhase.Casting && _activeCast.phase != SkillCastPhase.Channeling)
+                return false;
+
+            CompleteCast();
+            return true;
+        }
+
         void BeginCast(
             ISkill<T> skill,
             SkillContext<T> context,
@@ -214,6 +236,7 @@ namespace TechCosmos.SkillSystem.Casting
         {
             if (_activeCast == null) return;
 
+            _lastElapsed = _activeCast.elapsed;
             var cast = _activeCast;
             _activeCast = null;
 
