@@ -1,7 +1,7 @@
 # SkillSystem Casting
 
 > **包名**：`com.techcosmos.skillsystem.casting`  
-> **版本**：**1.1.0**  
+> **版本**：**1.2.0**  
 > **依赖**：`com.techcosmos.skillsystem`（SkillSystem Runtime 3.2+）  
 > **Unity**：2022.3 或更高  
 > **命名空间**：`TechCosmos.SkillSystem.Casting`
@@ -151,13 +151,13 @@ SkillHolder.TryCast
         │     ├─ Pipeline.CanExecute 失败 → false（不开读条）
         │     └─ Phase = Casting，派发 OnCastStarted
         │           Tick 攒满 castTime
-        │             ├─ 有 channelTime → Phase = Channeling，elapsed 清零
+        │             ├─ 有 channelTime → 记下前摇已过时间，Phase = Channeling，elapsed 清零
         │             │     Tick 攒满 channelTime → CompleteCast
         │             └─ 无引导 → CompleteCast
-        │                   先写 LastElapsed，再清会话，再 Pipeline.Execute
+        │                   写入 LastCastElapsed / LastChannelElapsed，再清会话，再 Pipeline.Execute
         │                     成功 → OnCastCompleted
         │                     失败 → OnCastFailed（蓝不够、条件、中间件取消等）
-        ├─ TryRelease（前摇/引导中）→ 同上 CompleteCast（前摇释放会跳过未开始的引导）
+        ├─ TryRelease（仅引导中）→ 同上 CompleteCast
         └─ 两个时长都是 0 → 立刻 Pipeline.Execute，返回是否 Success
 ```
 
@@ -234,10 +234,11 @@ ISkill<Hero> current = _cast.ActiveSkill;
 AI、指令、站桩都可以读这些。本包不替你停 NavMesh。
 
 ```csharp
-float charged = _cast.LastElapsed;   // 上次出手时当前阶段已过秒数
+float windup = _cast.LastCastElapsed;     // 上次出手时前摇走了多久
+float charged = _cast.LastChannelElapsed; // 上次出手时引导走了多久
 ```
 
-管线跑的时候 `Elapsed` 已经是 0，公式请读 `LastElapsed`。打断不改这个数。
+管线跑的时候 `Elapsed` 已经是 0。打断不改这两份。只有前摇、没有引导时，`LastChannelElapsed` 为 0。
 
 ### 6.4 提前释放
 
@@ -245,8 +246,8 @@ float charged = _cast.LastElapsed;   // 上次出手时当前阶段已过秒数
 bool released = _cast.TryRelease();
 ```
 
-读条/引导中立刻结算，不是 `Cancel`。不看 `SkillCanBeInterrupted`。  
-前摇阶段释放会跳过还没开始的引导。空闲时返回 `false`。
+**只在引导中**立刻结算，不是 `Cancel`。前摇是硬门槛，前摇中或空闲返回 `false`。  
+不看 `SkillCanBeInterrupted`。要做充能提前出手，数值层得给 `SkillChannelTime`。
 
 项目自己决定谁按键、要不要最短充能。本包不替你绑输入。
 
@@ -270,7 +271,7 @@ _cast.OnCastInterrupted += (skill, reason) => { /* 被打断 */ };
 
 | 类型 | 作用 |
 |------|------|
-| `SkillExecutionController<T>` | 状态机，实现 `ISkillExecutor<T>`；`LastElapsed` / `TryRelease` |
+| `SkillExecutionController<T>` | 状态机；`LastCastElapsed` / `LastChannelElapsed` / `TryRelease` |
 | `SkillCastPhase` | `None` / `Casting` / `Channeling` / `Executing` |
 | `InterruptReason` | 打断原因枚举 |
 | `SkillCastTiming` | 三个键名 + 从 DataLayer 读取 |
@@ -297,7 +298,7 @@ holder.TryCast(skill, context);
 有前摇时 `true` 只表示进了 Casting。结算在 Tick 走完或 `TryRelease` 之后。
 
 **公式里按充能时间算伤害？**  
-读 `LastElapsed`，不要读 `Elapsed`。`SkillCastTime` 仍是上限。
+读 `LastChannelElapsed`，不要读 `Elapsed`。`SkillChannelTime` 是引导上限，`SkillCastTime` 是必须走满的前摇。
 
 **事件被动/主动 Trigger 没有前摇？**  
 `ActiveBaseLayer.Trigger` 不走 Executor。指令施法请 `TryCast`。

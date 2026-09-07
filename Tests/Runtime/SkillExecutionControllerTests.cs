@@ -111,6 +111,22 @@ namespace TechCosmos.SkillSystem.Casting.Tests
         }
 
         [Test]
+        public void ChannelOnly_StartsInChannelingAndAllowsRelease()
+        {
+            var skill = CreateSkill(0f, channelTime: 2f);
+            var controller = new SkillExecutionController<MockUnit>();
+            int completed = 0;
+            controller.OnCastCompleted += (_, __) => completed++;
+
+            Assert.IsTrue(controller.TryExecute(skill, new SkillContext<MockUnit>(new MockUnit())));
+            Assert.AreEqual(SkillCastPhase.Channeling, controller.Phase);
+            Assert.IsTrue(controller.TryRelease());
+            Assert.AreEqual(1, completed);
+            Assert.AreEqual(0f, controller.LastCastElapsed, 0.001f);
+            Assert.AreEqual(0f, controller.LastChannelElapsed, 0.001f);
+        }
+
+        [Test]
         public void ChannelCast_CompletesAfterCastAndChannelTicks()
         {
             var skill = CreateSkill(0.5f, channelTime: 0.5f);
@@ -149,15 +165,17 @@ namespace TechCosmos.SkillSystem.Casting.Tests
         }
 
         [Test]
-        public void CompleteCast_WritesLastElapsedBeforePipelineAndClearsLiveElapsed()
+        public void CompleteCast_WritesLastCastElapsedAndClearsLiveElapsed()
         {
             var skill = CreateSkill(1f);
             var controller = new SkillExecutionController<MockUnit>();
-            float lastAtComplete = -1f;
+            float lastCast = -1f;
+            float lastChannel = -1f;
             float liveAtComplete = -1f;
             controller.OnCastCompleted += (_, __) =>
             {
-                lastAtComplete = controller.LastElapsed;
+                lastCast = controller.LastCastElapsed;
+                lastChannel = controller.LastChannelElapsed;
                 liveAtComplete = controller.Elapsed;
             };
 
@@ -165,47 +183,70 @@ namespace TechCosmos.SkillSystem.Casting.Tests
             controller.Tick();
             controller.Tick();
 
-            Assert.AreEqual(1f, lastAtComplete, 0.001f);
+            Assert.AreEqual(1f, lastCast, 0.001f);
+            Assert.AreEqual(0f, lastChannel, 0.001f);
             Assert.AreEqual(0f, liveAtComplete, 0.001f);
-            Assert.AreEqual(1f, controller.LastElapsed, 0.001f);
-            Assert.AreEqual(0f, controller.Elapsed, 0.001f);
+            Assert.AreEqual(1f, controller.LastCastElapsed, 0.001f);
+            Assert.AreEqual(0f, controller.LastChannelElapsed, 0.001f);
         }
 
         [Test]
-        public void TryRelease_FiresPipelineWithCurrentElapsed()
+        public void ChannelComplete_WritesBothLastElapsedSnapshots()
         {
-            var skill = CreateSkill(2f);
+            var skill = CreateSkill(0.5f, channelTime: 0.5f);
+            var controller = new SkillExecutionController<MockUnit>();
+
+            Assert.IsTrue(controller.TryExecute(skill, new SkillContext<MockUnit>(new MockUnit())));
+            controller.Tick();
+            controller.Tick();
+
+            Assert.AreEqual(0.5f, controller.LastCastElapsed, 0.001f);
+            Assert.AreEqual(0.5f, controller.LastChannelElapsed, 0.001f);
+        }
+
+        [Test]
+        public void TryRelease_OnlyWorksDuringChannel()
+        {
+            var skill = CreateSkill(0.5f, channelTime: 2f);
+            var controller = new SkillExecutionController<MockUnit>();
+            int completed = 0;
+            controller.OnCastCompleted += (_, __) => completed++;
+
+            Assert.IsTrue(controller.TryExecute(skill, new SkillContext<MockUnit>(new MockUnit())));
+            Assert.AreEqual(SkillCastPhase.Casting, controller.Phase);
+            Assert.IsFalse(controller.TryRelease());
+            Assert.AreEqual(0, completed);
+
+            controller.Tick();
+            Assert.AreEqual(SkillCastPhase.Channeling, controller.Phase);
+            controller.Tick();
+            Assert.IsTrue(controller.TryRelease());
+
+            Assert.AreEqual(1, completed);
+            Assert.AreEqual(0.5f, controller.LastCastElapsed, 0.001f);
+            Assert.AreEqual(0.5f, controller.LastChannelElapsed, 0.001f);
+            Assert.IsFalse(controller.IsBusy);
+            Assert.IsFalse(controller.TryRelease());
+        }
+
+        [Test]
+        public void TryRelease_WorksWhenChannelCannotBeInterrupted()
+        {
+            var skill = CreateSkill(0.5f, channelTime: 2f, canBeInterrupted: false);
             var controller = new SkillExecutionController<MockUnit>();
             int completed = 0;
             controller.OnCastCompleted += (_, __) => completed++;
 
             Assert.IsTrue(controller.TryExecute(skill, new SkillContext<MockUnit>(new MockUnit())));
             controller.Tick();
-            Assert.AreEqual(0.5f, controller.Elapsed, 0.001f);
-            Assert.IsTrue(controller.TryRelease());
-
-            Assert.AreEqual(1, completed);
-            Assert.AreEqual(0.5f, controller.LastElapsed, 0.001f);
-            Assert.IsFalse(controller.IsBusy);
-            Assert.IsFalse(controller.TryRelease());
-        }
-
-        [Test]
-        public void TryRelease_WorksWhenCastCannotBeInterrupted()
-        {
-            var skill = CreateSkill(2f, canBeInterrupted: false);
-            var controller = new SkillExecutionController<MockUnit>();
-            int completed = 0;
-            controller.OnCastCompleted += (_, __) => completed++;
-
-            Assert.IsTrue(controller.TryExecute(skill, new SkillContext<MockUnit>(new MockUnit())));
+            Assert.AreEqual(SkillCastPhase.Channeling, controller.Phase);
             Assert.IsFalse(controller.TryInterrupt(InterruptReason.Damage));
             Assert.IsTrue(controller.TryRelease());
             Assert.AreEqual(1, completed);
         }
 
         [Test]
-        public void TryRelease_DuringCastSkipsPendingChannel()
+        public void TryRelease_DuringCastDoesNotSkipChannel()
         {
             var skill = CreateSkill(2f, channelTime: 2f);
             var controller = new SkillExecutionController<MockUnit>();
@@ -214,14 +255,14 @@ namespace TechCosmos.SkillSystem.Casting.Tests
 
             Assert.IsTrue(controller.TryExecute(skill, new SkillContext<MockUnit>(new MockUnit())));
             Assert.AreEqual(SkillCastPhase.Casting, controller.Phase);
-            Assert.IsTrue(controller.TryRelease());
+            Assert.IsFalse(controller.TryRelease());
 
-            Assert.AreEqual(1, completed);
-            Assert.AreEqual(SkillCastPhase.None, controller.Phase);
+            Assert.AreEqual(0, completed);
+            Assert.AreEqual(SkillCastPhase.Casting, controller.Phase);
         }
 
         [Test]
-        public void Interrupt_DoesNotOverwriteLastElapsed()
+        public void Interrupt_DoesNotOverwriteLastSnapshots()
         {
             var first = CreateSkill(1f);
             var second = CreateSkill(2f, skillName: "Second");
@@ -230,11 +271,13 @@ namespace TechCosmos.SkillSystem.Casting.Tests
             Assert.IsTrue(controller.TryExecute(first, new SkillContext<MockUnit>(new MockUnit())));
             controller.Tick();
             controller.Tick();
-            Assert.AreEqual(1f, controller.LastElapsed, 0.001f);
+            Assert.AreEqual(1f, controller.LastCastElapsed, 0.001f);
+            Assert.AreEqual(0f, controller.LastChannelElapsed, 0.001f);
 
             Assert.IsTrue(controller.TryExecute(second, new SkillContext<MockUnit>(new MockUnit())));
             Assert.IsTrue(controller.TryInterrupt(InterruptReason.Manual));
-            Assert.AreEqual(1f, controller.LastElapsed, 0.001f);
+            Assert.AreEqual(1f, controller.LastCastElapsed, 0.001f);
+            Assert.AreEqual(0f, controller.LastChannelElapsed, 0.001f);
         }
     }
 }

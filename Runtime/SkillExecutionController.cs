@@ -42,8 +42,8 @@ namespace TechCosmos.SkillSystem.Casting
     {
         private readonly ISkillClock _clock;
         private ActiveCast _activeCast;
-        private float _lastElapsed;
-
+        private float _lastCastElapsed;
+        private float _lastChannelElapsed;
         /// <summary>当前施法阶段。</summary>
         public SkillCastPhase Phase => _activeCast?.phase ?? SkillCastPhase.None;
         /// <summary>当前正在施放的技能。</summary>
@@ -80,11 +80,15 @@ namespace TechCosmos.SkillSystem.Casting
         /// <summary>本次施法开始时刻（时钟 Time）。空闲为 0。</summary>
         public float StartedAt => _activeCast?.startedAt ?? 0f;
         /// <summary>
-        /// 上次成功出手时当前阶段已过秒数。满条和提前释放都会写。
-        /// 打断不改这个数。管线跑的时候读它，不要读 <see cref="Elapsed"/>（那时已经是 0）。
+        /// 上次成功出手时前摇实际走了多久。打断不改。
+        /// 管线跑的时候读它，不要读 <see cref="Elapsed"/>。
         /// </summary>
-        public float LastElapsed => _lastElapsed;
-
+        public float LastCastElapsed => _lastCastElapsed;
+        /// <summary>
+        /// 上次成功出手时引导实际走了多久。只有前摇则为 0。打断不改。
+        /// 管线跑的时候读它，不要读 <see cref="Elapsed"/>。
+        /// </summary>
+        public float LastChannelElapsed => _lastChannelElapsed;
         float CurrentPhaseDuration
         {
             get
@@ -157,6 +161,7 @@ namespace TechCosmos.SkillSystem.Casting
                     {
                         if (_activeCast.channelTime > 0f)
                         {
+                            _activeCast.committedCastElapsed = _activeCast.elapsed;
                             _activeCast.phase = SkillCastPhase.Channeling;
                             _activeCast.elapsed = 0f;
                         }
@@ -166,7 +171,6 @@ namespace TechCosmos.SkillSystem.Casting
                         }
                     }
                     break;
-
                 case SkillCastPhase.Channeling:
                     if (_activeCast.elapsed >= _activeCast.channelTime)
                         CompleteCast();
@@ -191,15 +195,13 @@ namespace TechCosmos.SkillSystem.Casting
         public void Cancel() => TryInterrupt(InterruptReason.Manual);
 
         /// <summary>
-        /// 提前结束当前前摇/引导并结算。不是打断。
-        /// 空闲或不是读条/引导时返回 false。不看 <see cref="CanBeInterrupted"/>。
-        /// 前摇阶段释放会跳过尚未开始的引导。
+        /// 提前结束当前引导并结算。不是打断。
+        /// 只在引导阶段成功。前摇是硬门槛，前摇中或空闲返回 false。
+        /// 不看 <see cref="CanBeInterrupted"/>。
         /// </summary>
         public bool TryRelease()
         {
-            if (_activeCast == null)
-                return false;
-            if (_activeCast.phase != SkillCastPhase.Casting && _activeCast.phase != SkillCastPhase.Channeling)
+            if (_activeCast == null || _activeCast.phase != SkillCastPhase.Channeling)
                 return false;
 
             CompleteCast();
@@ -225,10 +227,9 @@ namespace TechCosmos.SkillSystem.Casting
                 channelTime = channelTime,
                 canBeInterrupted = canBeInterrupted,
                 executionPriority = executionPriority,
-                phase = SkillCastPhase.Casting,
+                phase = castTime > 0f ? SkillCastPhase.Casting : SkillCastPhase.Channeling,
                 startedAt = _clock.Time
             };
-
             OnCastStarted?.Invoke(skill, context);
         }
 
@@ -236,10 +237,19 @@ namespace TechCosmos.SkillSystem.Casting
         {
             if (_activeCast == null) return;
 
-            _lastElapsed = _activeCast.elapsed;
+            if (_activeCast.phase == SkillCastPhase.Channeling)
+            {
+                _lastCastElapsed = _activeCast.committedCastElapsed;
+                _lastChannelElapsed = _activeCast.elapsed;
+            }
+            else
+            {
+                _lastCastElapsed = _activeCast.elapsed;
+                _lastChannelElapsed = 0f;
+            }
+
             var cast = _activeCast;
             _activeCast = null;
-
             var result = SkillExecutionPipeline.Execute(cast.skill, cast.context);
             if (result == SkillExecutionResult.Success)
                 OnCastCompleted?.Invoke(cast.skill, cast.context);
@@ -268,6 +278,7 @@ namespace TechCosmos.SkillSystem.Casting
             public SkillCastPhase phase;
             public float elapsed;
             public float startedAt;
+            public float committedCastElapsed;
         }
     }
 }
