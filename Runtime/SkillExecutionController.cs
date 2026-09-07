@@ -1,5 +1,6 @@
 using System;
 using TechCosmos.SkillSystem.Runtime;
+using UnityEngine;
 
 namespace TechCosmos.SkillSystem.Casting
 {
@@ -48,6 +49,49 @@ namespace TechCosmos.SkillSystem.Casting
         public ISkill<T> ActiveSkill => _activeCast?.skill;
         /// <summary>是否正在读条或引导。</summary>
         public bool IsBusy => _activeCast != null;
+        /// <summary>当前阶段已过秒数。切引导时清零。空闲为 0。</summary>
+        public float Elapsed => _activeCast?.elapsed ?? 0f;
+        /// <summary>本次开读条时抄下的前摇秒数。空闲为 0。</summary>
+        public float CastTime => _activeCast?.castTime ?? 0f;
+        /// <summary>本次开读条时抄下的引导秒数。空闲为 0。</summary>
+        public float ChannelTime => _activeCast?.channelTime ?? 0f;
+        /// <summary>当前阶段剩余秒数。空闲为 0。</summary>
+        public float Remaining
+        {
+            get
+            {
+                if (_activeCast == null) return 0f;
+                return Mathf.Max(0f, CurrentPhaseDuration - _activeCast.elapsed);
+            }
+        }
+        /// <summary>当前阶段进度 0～1。空闲或时长为 0 时为 0。切引导后从 0 再走。</summary>
+        public float Progress
+        {
+            get
+            {
+                float duration = CurrentPhaseDuration;
+                if (duration <= 0f) return 0f;
+                return Mathf.Clamp01(_activeCast.elapsed / duration);
+            }
+        }
+        /// <summary>本次施法是否可被外部打断。空闲为 true。</summary>
+        public bool CanBeInterrupted => _activeCast?.canBeInterrupted ?? true;
+        /// <summary>本次施法开始时刻（时钟 Time）。空闲为 0。</summary>
+        public float StartedAt => _activeCast?.startedAt ?? 0f;
+
+        float CurrentPhaseDuration
+        {
+            get
+            {
+                if (_activeCast == null) return 0f;
+                return _activeCast.phase switch
+                {
+                    SkillCastPhase.Casting => _activeCast.castTime,
+                    SkillCastPhase.Channeling => _activeCast.channelTime,
+                    _ => 0f
+                };
+            }
+        }
 
         /// <summary>开始读条/引导时触发。</summary>
         public event Action<ISkill<T>, SkillContext<T>> OnCastStarted;
