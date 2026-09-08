@@ -1,8 +1,8 @@
 # SkillSystem Casting
 
 > **包名**：`com.techcosmos.skillsystem.casting`  
-> **版本**：**1.2.0**  
-> **依赖**：`com.techcosmos.skillsystem`（SkillSystem Runtime 3.2+）  
+> **版本**：**1.4.0**  
+> **依赖**：`com.techcosmos.skillsystem`（SkillSystem Runtime 3.2+，需带 `RequiredData.SeedFromKey`）  
 > **Unity**：2022.3 或更高  
 > **命名空间**：`TechCosmos.SkillSystem.Casting`
 
@@ -27,7 +27,7 @@ TryCast（核心 API 不变）
 2. [安装](#2-安装)
 3. [5 分钟接入](#3-5-分钟接入)
 4. [施法流程](#4-施法流程)
-5. [数值层三个键](#5-数值层三个键)
+5. [数值层键](#5-数值层键)
 6. [打断与优先级](#6-打断与优先级)
 7. [事件与表现](#7-事件与表现)
 8. [API 速查](#8-api-速查)
@@ -41,9 +41,9 @@ TryCast（核心 API 不变）
 
 - 读条（`SkillCastTime`）
 - 引导（`SkillChannelTime`）
-- 读条/引导期间可否被外部打断（`SkillCanBeInterrupted`）
+- 前摇 / 引导可否被外部打断（分阶段两个键）
 - 读完后调用核心 `SkillExecutionPipeline`
-- 把上述三个键灌进技能数值层（中间件 + 技能编辑器「概念」分组）
+- 把时长和可打断键灌进技能数值层（中间件 + 技能编辑器「概念」分组）
 
 ### 不管（项目自己写）
 
@@ -84,7 +84,8 @@ TryCast（核心 API 不变）
 |----|------|------|------|
 | `SkillCastTime` | float / 公式 | `0` | 前摇（秒） |
 | `SkillChannelTime` | float / 公式 | `0` | 引导（秒） |
-| `SkillCanBeInterrupted` | bool | `true` | 读条/引导能否被外部打断 |
+| `SkillCastCanBeInterrupted` | bool | `true` | 前摇能否被外部打断 |
+| `SkillChannelCanBeInterrupted` | bool | `true` | 引导能否被外部打断 |
 
 把生成的中间件挂进你的 `GlobalMiddlewareRegistry`（和其他中间件一样）。  
 两个时长都是 `0` 的技能仍然立刻放，行为与没装本包相同。
@@ -168,14 +169,16 @@ SkillHolder.TryCast
 
 ---
 
-## 5. 数值层三个键
+## 5. 数值层键
 
 控制器只认这些名字（`SkillCastTiming` 常量，与中间件 `RequiredData` 一致）：
 
 ```csharp
 SkillCastTiming.CastTimeKey           // "SkillCastTime"
 SkillCastTiming.ChannelTimeKey        // "SkillChannelTime"
-SkillCastTiming.CanBeInterruptedKey   // "SkillCanBeInterrupted"
+SkillCastTiming.CastCanBeInterruptedKey     // "SkillCastCanBeInterrupted"
+SkillCastTiming.ChannelCanBeInterruptedKey  // "SkillChannelCanBeInterrupted"
+SkillCastTiming.CanBeInterruptedKey         // "SkillCanBeInterrupted"（旧键，缺新键时回退）
 ```
 
 读取：
@@ -183,11 +186,14 @@ SkillCastTiming.CanBeInterruptedKey   // "SkillCanBeInterrupted"
 ```csharp
 float windup = SkillCastTiming.GetCastTime(skill, context);
 float channel = SkillCastTiming.GetChannelTime(skill, context);
-bool canInterrupt = SkillCastTiming.GetCanBeInterrupted(skill, context);
+bool castOk = SkillCastTiming.GetCastCanBeInterrupted(skill, context);
+bool channelOk = SkillCastTiming.GetChannelCanBeInterrupted(skill, context);
 ```
 
 缺键时：时长当 `0`，可打断当 `true`。  
-技能编辑器里改这三个数即可，**不必**为本包再开编辑窗口。
+编辑器**第一次写入**两个新打断键时，若数值层已有旧键 `SkillCanBeInterrupted`，会抄旧值，不走默认 `true`。已经生成过新键的资源不会自动改。  
+运行时：新键在就用新键，缺新键才回退旧键。  
+技能编辑器里改这些数即可，**不必**为本包再开编辑窗口。
 
 ---
 
@@ -210,7 +216,8 @@ _cast.Cancel();   // = Manual
 | `Silence` | 沉默 |
 | `Death` | 死亡、回池 |
 
-`SkillCanBeInterrupted == false` 时：只有 **`Manual` 和 `Death`** 能打断，其它原因返回 `false`、读条继续。
+当前阶段对应的可打断为 `false` 时：只有 **`Manual` 和 `Death`** 能打断，其它原因返回 `false`、该阶段继续。  
+缺新键时回退旧键 `SkillCanBeInterrupted`（两阶段同一值）。
 
 项目不调用 `TryInterrupt`，读条就不会因移动/受伤而断。这是刻意的。
 
@@ -219,15 +226,18 @@ _cast.Cancel();   // = Manual
 `SkillProfile.executionPriority` 仍在核心 Profile 上。  
 正在读条时再 `TryCast` 另一个技能：
 
-- 当前不可打断 → 新技能失败，旧读条继续
-- 新技能优先级 **大于** 当前 → 旧的按 `Manual` 打断，开始新读条
+- 当前阶段不可打断 → 新技能失败，旧读条继续（优先级再高也顶不掉）
+- 当前可打断且新技能优先级 **大于** 当前 → 旧的按 `Manual` 打断，开始新读条
 - 否则 → 新技能失败
+
+不可打断 = 当前阶段既不能被外部打断，也不能被更高优先级顶掉。  
+例外：`TryInterrupt(Manual)` 和 `TryInterrupt(Death)` 仍然能断。死亡后立刻放技能：先 `TryInterrupt(Death)`，再 `TryCast`。
 
 ### 6.3 忙状态
 
 ```csharp
 bool busy = _cast.IsBusy;
-SkillCastPhase phase = _cast.Phase;   // None / Casting / Channeling / Executing
+SkillCastPhase phase = _cast.Phase;   // None / Casting / Channeling；Executing 预留，同步管线不会进
 ISkill<Hero> current = _cast.ActiveSkill;
 ```
 
@@ -247,7 +257,7 @@ bool released = _cast.TryRelease();
 ```
 
 **只在引导中**立刻结算，不是 `Cancel`。前摇是硬门槛，前摇中或空闲返回 `false`。  
-不看 `SkillCanBeInterrupted`。要做充能提前出手，数值层得给 `SkillChannelTime`。
+不看可打断键。要做充能提前出手，数值层得给 `SkillChannelTime`。
 
 项目自己决定谁按键、要不要最短充能。本包不替你绑输入。
 
@@ -259,7 +269,7 @@ bool released = _cast.TryRelease();
 _cast.OnCastStarted     += (skill, ctx) => { /* 读条开始：播前摇动画 */ };
 _cast.OnCastCompleted   += (skill, ctx) => { /* 管线成功 */ };
 _cast.OnCastFailed      += (skill, ctx, result) => { /* 条走完但结算失败 */ };
-_cast.OnCastInterrupted += (skill, reason) => { /* 被打断 */ };
+_cast.OnCastInterrupted += (skill, info) => { /* info.Phase / info.Elapsed / info.CastElapsed / info.TotalElapsed / info.Reason */ };
 ```
 
 核心 `SkillPresentationBinder.BindCaster` 订的是 ExecuteLayer（机制开跑 ≈ CastStart）。  
@@ -272,9 +282,10 @@ _cast.OnCastInterrupted += (skill, reason) => { /* 被打断 */ };
 | 类型 | 作用 |
 |------|------|
 | `SkillExecutionController<T>` | 状态机；`LastCastElapsed` / `LastChannelElapsed` / `TryRelease` |
-| `SkillCastPhase` | `None` / `Casting` / `Channeling` / `Executing` |
+| `SkillCastPhase` | `None` / `Casting` / `Channeling`；`Executing` 预留，当前不会进入 |
 | `InterruptReason` | 打断原因枚举 |
-| `SkillCastTiming` | 三个键名 + 从 DataLayer 读取 |
+| `SkillCastTiming` | 时长 / 分阶段可打断键 + 从 DataLayer 读取 |
+| `CastInterruptInfo` | 打断时的原因、阶段、本阶段已过、前摇已过、合计已过 |
 | `SkillCastMiddleware<T>` | 开泛型中间件；本包菜单选 IUnit 生成封闭类 |
 
 `SkillHolder<T>.Executor`（核心）：
@@ -291,7 +302,7 @@ holder.TryCast(skill, context);
 **装了包但所有技能都是秒放？**  
 没挂 `Executor`、没 Tick、或 `SkillCastTime` / `SkillChannelTime` 都是 0。先查这三件。
 
-**数值层没有这三个键？**  
+**数值层没有时长 / 可打断键？**  
 没走本包菜单 `Generate Cast Middleware`、没选 IUnit，或生成类没进 Middleware Registry。技能框架的 Generate All **不会**生成本包中间件。
 
 **TryCast 返回 true 但伤害还没出？**  

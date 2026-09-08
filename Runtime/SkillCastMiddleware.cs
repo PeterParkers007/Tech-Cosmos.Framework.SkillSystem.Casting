@@ -12,8 +12,10 @@ namespace TechCosmos.SkillSystem.Casting
         Description = "前摇 / 施法时间（秒）")]
     [RequiredData("SkillChannelTime", typeof(float), Shared = true, IsFormula = true, StaticValue = 0f,
         Description = "引导 / 持续施法时间（秒）")]
-    [RequiredData("SkillCanBeInterrupted", typeof(bool), Shared = true, DefaultValue = "true",
-        Description = "读条/引导是否可被外部打断")]
+    [RequiredData("SkillCastCanBeInterrupted", typeof(bool), Shared = true, DefaultValue = "true",
+        Description = "前摇是否可被外部打断", SeedFromKey = SkillCastTiming.CanBeInterruptedKey)]
+    [RequiredData("SkillChannelCanBeInterrupted", typeof(bool), Shared = true, DefaultValue = "true",
+        Description = "引导是否可被外部打断", SeedFromKey = SkillCastTiming.CanBeInterruptedKey)]
     public class SkillCastMiddleware<T> : Middleware<T> where T : class, IUnit<T>
     {
     }

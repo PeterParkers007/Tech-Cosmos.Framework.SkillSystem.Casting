@@ -21,6 +21,8 @@ namespace TechCosmos.SkillSystem.Casting.Tests
             float castTime,
             float channelTime = 0f,
             bool canBeInterrupted = true,
+            bool? canCastBeInterrupted = null,
+            bool? canChannelBeInterrupted = null,
             List<Condition<MockUnit>> conditions = null,
             int executionPriority = 0,
             string skillName = "TestSkill")
@@ -36,7 +38,8 @@ namespace TechCosmos.SkillSystem.Casting.Tests
             };
             data.SetValue(SkillCastTiming.CastTimeKey, castTime);
             data.SetValue(SkillCastTiming.ChannelTimeKey, channelTime);
-            data.SetValue(SkillCastTiming.CanBeInterruptedKey, canBeInterrupted);
+            data.SetValue(SkillCastTiming.CastCanBeInterruptedKey, canCastBeInterrupted ?? canBeInterrupted);
+            data.SetValue(SkillCastTiming.ChannelCanBeInterruptedKey, canChannelBeInterrupted ?? canBeInterrupted);
             return SkillFactory<MockUnit>.CreateSkill(data);
         }
 
@@ -278,6 +281,99 @@ namespace TechCosmos.SkillSystem.Casting.Tests
             Assert.IsTrue(controller.TryInterrupt(InterruptReason.Manual));
             Assert.AreEqual(1f, controller.LastCastElapsed, 0.001f);
             Assert.AreEqual(0f, controller.LastChannelElapsed, 0.001f);
+        }
+
+        [Test]
+        public void Interrupt_ReportsPhaseAndElapsedInEvent()
+        {
+            var skill = CreateSkill(2f);
+            var controller = new SkillExecutionController<MockUnit>();
+            CastInterruptInfo info = default;
+            controller.OnCastInterrupted += (_, captured) => info = captured;
+
+            Assert.IsTrue(controller.TryExecute(skill, new SkillContext<MockUnit>(new MockUnit())));
+            controller.Tick();
+            Assert.IsTrue(controller.TryInterrupt(InterruptReason.Damage));
+
+            Assert.AreEqual(InterruptReason.Damage, info.Reason);
+            Assert.AreEqual(SkillCastPhase.Casting, info.Phase);
+            Assert.AreEqual(0.5f, info.Elapsed, 0.001f);
+            Assert.AreEqual(0.5f, info.CastElapsed, 0.001f);
+            Assert.AreEqual(0.5f, info.TotalElapsed, 0.001f);
+        }
+
+        [Test]
+        public void Interrupt_ReportsCommittedCastAndTotalWhenChanneling()
+        {
+            var skill = CreateSkill(0.5f, channelTime: 2f);
+            var controller = new SkillExecutionController<MockUnit>();
+            CastInterruptInfo info = default;
+            controller.OnCastInterrupted += (_, captured) => info = captured;
+
+            Assert.IsTrue(controller.TryExecute(skill, new SkillContext<MockUnit>(new MockUnit())));
+            controller.Tick();
+            controller.Tick();
+            Assert.AreEqual(SkillCastPhase.Channeling, controller.Phase);
+            Assert.IsTrue(controller.TryInterrupt(InterruptReason.Damage));
+
+            Assert.AreEqual(InterruptReason.Damage, info.Reason);
+            Assert.AreEqual(SkillCastPhase.Channeling, info.Phase);
+            Assert.AreEqual(0.5f, info.Elapsed, 0.001f);
+            Assert.AreEqual(0.5f, info.CastElapsed, 0.001f);
+            Assert.AreEqual(1.0f, info.TotalElapsed, 0.001f);
+        }
+
+        [Test]
+        public void Interrupt_ChannelFlagIndependentFromCast()
+        {
+            var skill = CreateSkill(
+                0.5f,
+                channelTime: 2f,
+                canCastBeInterrupted: true,
+                canChannelBeInterrupted: false);
+            var controller = new SkillExecutionController<MockUnit>();
+
+            Assert.IsTrue(controller.TryExecute(skill, new SkillContext<MockUnit>(new MockUnit())));
+            Assert.IsTrue(controller.TryInterrupt(InterruptReason.Damage));
+        }
+
+        [Test]
+        public void Interrupt_ChannelUninterruptibleAfterWindup()
+        {
+            var skill = CreateSkill(
+                0.5f,
+                channelTime: 2f,
+                canCastBeInterrupted: true,
+                canChannelBeInterrupted: false);
+            var controller = new SkillExecutionController<MockUnit>();
+
+            Assert.IsTrue(controller.TryExecute(skill, new SkillContext<MockUnit>(new MockUnit())));
+            controller.Tick();
+            Assert.AreEqual(SkillCastPhase.Channeling, controller.Phase);
+            Assert.IsFalse(controller.TryInterrupt(InterruptReason.Damage));
+            Assert.AreEqual(SkillCastPhase.Channeling, controller.Phase);
+            Assert.IsTrue(controller.TryInterrupt(InterruptReason.Manual));
+        }
+
+        [Test]
+        public void Interrupt_FallsBackToLegacyKeyWhenPhaseKeysMissing()
+        {
+            var data = new SkillData<MockUnit>
+            {
+                SkillId = "test.legacy_interrupt",
+                SkillName = "Legacy",
+                SkillType = SkillType.Active,
+                TriggerEvents = new List<string> { "OnAttack" },
+                Profile = new SkillProfile()
+            };
+            data.SetValue(SkillCastTiming.CastTimeKey, 2f);
+            data.SetValue(SkillCastTiming.CanBeInterruptedKey, false);
+            var skill = SkillFactory<MockUnit>.CreateSkill(data);
+            var controller = new SkillExecutionController<MockUnit>();
+
+            Assert.IsTrue(controller.TryExecute(skill, new SkillContext<MockUnit>(new MockUnit())));
+            Assert.IsFalse(controller.TryInterrupt(InterruptReason.Damage));
+            Assert.IsTrue(controller.IsBusy);
         }
     }
 }

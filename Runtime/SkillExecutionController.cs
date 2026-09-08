@@ -13,7 +13,7 @@ namespace TechCosmos.SkillSystem.Casting
         Casting,
         /// <summary>引导中。</summary>
         Channeling,
-        /// <summary>执行中。</summary>
+        /// <summary>预留。当前管线同步执行，不会进入此状态。</summary>
         Executing
     }
 
@@ -32,6 +32,34 @@ namespace TechCosmos.SkillSystem.Casting
         Silence,
         /// <summary>死亡。</summary>
         Death
+    }
+
+    /// <summary>打断当时的阶段和已过时间。清会话前抄下来，回调里不要再读控制器上的 Elapsed。</summary>
+    public readonly struct CastInterruptInfo
+    {
+        public readonly InterruptReason Reason;
+        public readonly SkillCastPhase Phase;
+        /// <summary>打断时所在阶段已过秒数。</summary>
+        public readonly float Elapsed;
+        /// <summary>前摇已走过的秒数。前摇中打断等于 <see cref="Elapsed"/>。</summary>
+        public readonly float CastElapsed;
+        /// <summary>本次施法一共走过的秒数（前摇 + 当前引导）。</summary>
+        public readonly float TotalElapsed;
+
+        public CastInterruptInfo(
+            InterruptReason reason,
+            SkillCastPhase phase,
+            float elapsed,
+            float castElapsed)
+        {
+            Reason = reason;
+            Phase = phase;
+            Elapsed = elapsed;
+            CastElapsed = castElapsed;
+            TotalElapsed = phase == SkillCastPhase.Channeling
+                ? castElapsed + elapsed
+                : elapsed;
+        }
     }
 
     /// <summary>
@@ -75,8 +103,8 @@ namespace TechCosmos.SkillSystem.Casting
                 return Mathf.Clamp01(_activeCast.elapsed / duration);
             }
         }
-        /// <summary>本次施法是否可被外部打断。空闲为 true。</summary>
-        public bool CanBeInterrupted => _activeCast?.canBeInterrupted ?? true;
+        /// <summary>当前阶段是否可被外部打断。空闲为 true。</summary>
+        public bool CanBeInterrupted => _activeCast == null || CurrentPhaseCanBeInterrupted();
         /// <summary>本次施法开始时刻（时钟 Time）。空闲为 0。</summary>
         public float StartedAt => _activeCast?.startedAt ?? 0f;
         /// <summary>
@@ -113,7 +141,7 @@ namespace TechCosmos.SkillSystem.Casting
         /// </summary>
         public event Action<ISkill<T>, SkillContext<T>, SkillExecutionResult> OnCastFailed;
         /// <summary>施法被打断时触发。</summary>
-        public event Action<ISkill<T>, InterruptReason> OnCastInterrupted;
+        public event Action<ISkill<T>, CastInterruptInfo> OnCastInterrupted;
 
         public SkillExecutionController(ISkillClock clock = null)
         {
@@ -139,7 +167,9 @@ namespace TechCosmos.SkillSystem.Casting
                     return false;
 
                 BeginCast(skill, context, castTime, channelTime,
-                    SkillCastTiming.GetCanBeInterrupted(skill, context), incomingPriority);
+                    SkillCastTiming.GetCastCanBeInterrupted(skill, context),
+                    SkillCastTiming.GetChannelCanBeInterrupted(skill, context),
+                    incomingPriority);
                 return true;
             }
 
@@ -182,12 +212,19 @@ namespace TechCosmos.SkillSystem.Casting
         public bool TryInterrupt(InterruptReason reason)
         {
             if (_activeCast == null) return false;
-            if (!_activeCast.canBeInterrupted && reason != InterruptReason.Manual && reason != InterruptReason.Death)
+            if (!CurrentPhaseCanBeInterrupted()
+                && reason != InterruptReason.Manual
+                && reason != InterruptReason.Death)
                 return false;
 
+            float phaseElapsed = _activeCast.elapsed;
+            float castElapsed = _activeCast.phase == SkillCastPhase.Channeling
+                ? _activeCast.committedCastElapsed
+                : phaseElapsed;
+            var info = new CastInterruptInfo(reason, _activeCast.phase, phaseElapsed, castElapsed);
             var skill = _activeCast.skill;
             _activeCast = null;
-            OnCastInterrupted?.Invoke(skill, reason);
+            OnCastInterrupted?.Invoke(skill, info);
             return true;
         }
 
@@ -213,7 +250,8 @@ namespace TechCosmos.SkillSystem.Casting
             SkillContext<T> context,
             float castTime,
             float channelTime,
-            bool canBeInterrupted,
+            bool canCastBeInterrupted,
+            bool canChannelBeInterrupted,
             int executionPriority)
         {
             if (_activeCast != null)
@@ -225,7 +263,8 @@ namespace TechCosmos.SkillSystem.Casting
                 context = context,
                 castTime = castTime,
                 channelTime = channelTime,
-                canBeInterrupted = canBeInterrupted,
+                canCastBeInterrupted = canCastBeInterrupted,
+                canChannelBeInterrupted = canChannelBeInterrupted,
                 executionPriority = executionPriority,
                 phase = castTime > 0f ? SkillCastPhase.Casting : SkillCastPhase.Channeling,
                 startedAt = _clock.Time
@@ -257,10 +296,18 @@ namespace TechCosmos.SkillSystem.Casting
                 OnCastFailed?.Invoke(cast.skill, cast.context, result);
         }
 
+        bool CurrentPhaseCanBeInterrupted()
+        {
+            if (_activeCast == null) return true;
+            return _activeCast.phase == SkillCastPhase.Channeling
+                ? _activeCast.canChannelBeInterrupted
+                : _activeCast.canCastBeInterrupted;
+        }
+
         bool CanInterruptCurrent(int incomingPriority)
         {
             if (_activeCast == null) return true;
-            if (!_activeCast.canBeInterrupted) return false;
+            if (!CurrentPhaseCanBeInterrupted()) return false;
             return incomingPriority > _activeCast.executionPriority;
         }
 
@@ -273,7 +320,8 @@ namespace TechCosmos.SkillSystem.Casting
             public SkillContext<T> context;
             public float castTime;
             public float channelTime;
-            public bool canBeInterrupted;
+            public bool canCastBeInterrupted;
+            public bool canChannelBeInterrupted;
             public int executionPriority;
             public SkillCastPhase phase;
             public float elapsed;
