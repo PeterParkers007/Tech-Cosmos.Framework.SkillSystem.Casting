@@ -1,13 +1,13 @@
 {
   "name": "com.techcosmos.skillsystem.casting",
   "displayName": "SkillSystem Casting",
-  "version": "1.4.0",
-  "description": "技能框架的可选施法扩展：读条 / 引导 / 打断 / 提前释放。接入 SkillHolder.Executor，由项目 Tick。",
+  "version": "2.0.0",
+  "description": "技能框架的可选施法扩展：释放前读条 / 打断，以及出手后的引导机制。接入 SkillHolder.Executor，由项目 Tick。",
   "unity": "2022.3",
   "keywords": [
     "skill",
     "cast",
-    "channel",
+    "windup",
     "interrupt"
   ],
   "author": {
