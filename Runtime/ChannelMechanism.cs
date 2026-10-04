@@ -27,6 +27,7 @@ namespace TechCosmos.SkillSystem.Casting
         [Tooltip("引导时：持续、间隔、标签、进出清理")]
         public BuffDataSO channelBuff;
 
+        [SkillToBuffBindingSource(nameof(channelBuff))]
         [Tooltip("技能数值层 → 引导 Buff 数值层，只影响本次实例")]
         public List<SkillToBuffDataBinding> buffDataBindings = new();
 
