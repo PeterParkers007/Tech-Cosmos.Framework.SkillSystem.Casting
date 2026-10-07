@@ -135,7 +135,7 @@ namespace TechCosmos.SkillSystem.Casting
             if (channelBuff != null)
             {
                 var configurable = new ConfigurableBuff<T>(hostUnit, channelBuff, context.caster)
-                    .SetBuffName(string.IsNullOrEmpty(id) ? channelBuff.buffName : id)
+                    .SetBuffId(id)
                     .WithDuration(channelDuration)
                     .SetMaxStacks(maxStacks > 0 ? maxStacks : channelBuff.maxStacks)
                     .SetStackPolicy(BuffStackPolicyMapper.ToGbfPolicy(stackPolicy));
